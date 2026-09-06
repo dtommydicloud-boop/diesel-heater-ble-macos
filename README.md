@@ -6,6 +6,12 @@ hardware you actually have. Three ways in, same protocol underneath.
 
 ## Is this compatible with your heater?
 
+![The wired controller panel this repo talks to over Bluetooth — LCD display, speaker, up/down/mode/power buttons](images/controller-panel.jpg)
+
+*The physical wired controller this repo was built and tested against —
+if yours looks basically like this (same button layout, same style LCD),
+that's a good visual sign, though the app name check below is the real test.*
+
 Chinese diesel heaters get sold under dozens of storefront brand names off
 a small number of shared control boards, and there are at least **four
 different, incompatible Bluetooth protocols** in circulation depending on
