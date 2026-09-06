@@ -82,6 +82,14 @@ a permission popup on:
   what that trigger is (a Telegram bot, a webhook, a cron schedule, Home
   Assistant, etc.) since that part is genuinely specific to your setup.
 
+## Running on an ESP32
+
+See `esp32/` — a port of the same proven protocol to run on an ESP32
+microcontroller instead of a Mac/Pi (cheaper, lower power, can stay plugged
+in permanently right next to the heater). **Unverified on real hardware**
+unlike the Python version — the protocol logic is proven, but the ESP32 BLE
+client code itself hasn't been flash-tested yet. See `esp32/README.md`.
+
 ## Protocol notes
 
 - GATT service: `0000ffe0-0000-1000-8000-00805f9b34fb`
