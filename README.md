@@ -53,6 +53,35 @@ click it. If a scan hangs well past ~15 seconds:
 
 Once granted, it's a one-time fix — subsequent runs complete in seconds.
 
+## Running on Linux / Raspberry Pi
+
+Good news: **you don't need a different script.** `bleak` is cross-platform
+and talks to BlueZ directly on Linux, so `heater_control.py` runs on a
+Raspberry Pi (or any Linux box with a Bluetooth adapter) as-is. If you'd
+rather use the original `bluepy`-based projects instead, they're
+Linux-native and will also work fine on a Pi — this repo exists specifically
+for the platforms those don't cover.
+
+A few Linux-specific things worth knowing, since a Pi has no GUI to click
+a permission popup on:
+
+- Make sure BlueZ is installed and the Bluetooth service is running:
+  `sudo systemctl status bluetooth` (Raspberry Pi OS has this by default).
+- Unlike macOS's permission-prompt model, Linux BLE scanning typically just
+  needs the right process capabilities rather than a click-through prompt.
+  If you get a permission error running as a normal user, either run with
+  `sudo`, or grant the capability directly so you don't have to run as root:
+  ```bash
+  sudo setcap 'cap_net_raw,cap_net_admin+eip' $(readlink -f $(which python3))
+  ```
+- For an always-on bridge sitting near the heater (the actual point of
+  putting this on a Pi — a phone/laptop isn't always in range, but a Pi
+  plugged in nearby always is), a small `systemd` service or your own
+  cron/script wrapper works fine to call `heater_control.py` on a schedule
+  or in response to some trigger; this repo intentionally doesn't assume
+  what that trigger is (a Telegram bot, a webhook, a cron schedule, Home
+  Assistant, etc.) since that part is genuinely specific to your setup.
+
 ## Protocol notes
 
 - GATT service: `0000ffe0-0000-1000-8000-00805f9b34fb`
