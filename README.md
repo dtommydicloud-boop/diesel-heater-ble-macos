@@ -2,25 +2,38 @@
 
 Control a Chinese diesel parking heater (BYD-branded, uses the **AirHeaterBLE**
 app protocol shared by many rebadged Vevor/HCalory/BYD/Sunster units) over
-Bluetooth Low Energy — **from macOS**, not just Linux.
+Bluetooth Low Energy — no phone, no official app, on whatever hardware you
+actually have. Three ways in, same protocol underneath:
+
+| Platform | Language/library | Status |
+|---|---|---|
+| **macOS / Linux / Raspberry Pi** | Python + [`bleak`](https://github.com/hbldh/bleak) | **Proven** — confirmed live against a real heater |
+| **ESP32** | Arduino C++ + ESP32 BLE library | Unverified — protocol proven, board code not yet flash-tested |
+
+Pick whichever fits what you've got lying around: a laptop for a quick test,
+a Pi for something that just stays plugged in near the heater, or an ESP32
+if you want the cheapest, lowest-power always-on option.
 
 ## Why this exists
 
 The existing community reverse-engineering of this protocol —
 [`spin877/Bruciatore_BLE`](https://github.com/spin877/Bruciatore_BLE) and the
 [`Spettacolo83/homeassistant-diesel-heater`](https://github.com/Spettacolo83/homeassistant-diesel-heater)
-Home Assistant integration — is built on `bluepy`, which only works on Linux
-via BlueZ. Neither runs on macOS. This is a small, direct port to
-[`bleak`](https://github.com/hbldh/bleak) (cross-platform BLE), confirmed
-working on macOS via CoreBluetooth. All credit for the actual protocol
-reverse-engineering goes to those projects — this repo just makes it usable
-from a Mac.
+Home Assistant integration — is built on `bluepy`, which only runs on Linux
+via BlueZ. That's real, working, and native to a Raspberry Pi already — but
+it left out macOS entirely, and it isn't something you can drop onto a bare
+microcontroller either. This repo fills both of those gaps: a `bleak`-based
+version that covers macOS (and Linux/Pi too, since `bleak` is cross-platform),
+plus a from-scratch Arduino port of the same exact protocol for ESP32. All
+credit for the actual protocol reverse-engineering goes to the two projects
+above — everything here is about making that same protocol reachable from
+more places, not re-discovering it.
 
 ## What it does
 
 Sends the same Bluetooth commands the official AirHeaterBLE phone app sends:
 power on, power off, and status. No phone required, no range limit beyond
-whatever machine you run this on.
+whatever device you run this on.
 
 ## Requirements
 
