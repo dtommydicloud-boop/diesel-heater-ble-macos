@@ -1,9 +1,39 @@
 # diesel-heater-ble-macos
 
-Control a Chinese diesel parking heater (BYD-branded, uses the **AirHeaterBLE**
-app protocol shared by many rebadged Vevor/HCalory/BYD/Sunster units) over
-Bluetooth Low Energy — no phone, no official app, on whatever hardware you
-actually have. Three ways in, same protocol underneath:
+Control a Chinese diesel parking heater that uses the **AirHeaterBLE** app
+protocol over Bluetooth Low Energy — no phone, no official app, on whatever
+hardware you actually have. Three ways in, same protocol underneath.
+
+## Is this compatible with your heater?
+
+Chinese diesel heaters get sold under dozens of storefront brand names off
+a small number of shared control boards, and there are at least **four
+different, incompatible Bluetooth protocols** in circulation depending on
+which board/app your specific unit shipped with. This repo only implements
+one of them: **AirHeaterBLE**, protocol frame markers `AA55`/`AA66`.
+
+**Confirmed compatible** (heater's Bluetooth app is literally named
+"AirHeaterBLE," or the app store listing/manual says so):
+- **BYD**-branded units (this is the exact device this repo was built and
+  tested against — BLE name pattern `BYD-XXXXXXXXXXXX`)
+- **Vevor**
+
+**Probably a different, incompatible protocol** (documented under other
+apps/frame formats by the wider community, don't assume this repo works
+without checking first): heaters using **HeaterCC** (frame marker `ABBA`),
+**Sunster** (`CBFF`), or **Hcalory** (`MVP1`/`MVP2`) apps. If your heater's
+app has one of those exact names, this repo is not what you want — see
+[`Spettacolo83/homeassistant-diesel-heater`](https://github.com/Spettacolo83/homeassistant-diesel-heater),
+which covers all four protocol families.
+
+**How to check yours:** look at what app your heater's manual or box tells
+you to install. If it's called AirHeaterBLE, you're almost certainly
+compatible even if the heater is sold under some other storefront brand
+name (VOR, HCALORY-adjacent knockoffs, generic Amazon/eBay "5KW diesel air
+heater" listings, etc. all reuse the same handful of control boards) — the
+app name is a far more reliable signal than the brand printed on the box.
+
+Three ways to actually run it, same protocol underneath:
 
 | Platform | Language/library | Status |
 |---|---|---|
