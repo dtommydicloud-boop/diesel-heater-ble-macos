@@ -77,10 +77,52 @@ in this repo packages this as an invocable skill — drop it in
 ## Safety
 
 This only sends the same start/stop commands the manufacturer's own app
-sends — it doesn't bypass any safety interlock the heater itself has. As
-with any unattended combustion heater, pair remote/scheduled starts with an
-independent CO detector and don't rely on this alone to confirm the heater
-actually ignited safely.
+sends — it doesn't add any safety feature the heater doesn't already have,
+and it doesn't bypass any interlock it does have. Remote starting a
+combustion heater carries real risks that have nothing to do with software:
+
+- **Carbon monoxide.** This is the big one. A diesel heater vents exhaust
+  outside, but a blocked, iced-over, snow-drifted, or improperly-routed
+  exhaust pipe forces CO back into the space instead. CO is odorless,
+  colorless, and it kills people who are asleep or just don't notice in
+  time. **Install an independent battery- or hardwired-powered CO detector**
+  in any space this heater runs in — one that doesn't depend on the same
+  power/network as the heater or this script. If you're doing anything
+  "smart" with this at all, wire that detector to auto-trigger the OFF
+  command the moment CO is detected, don't just hope you notice an alarm
+  remotely.
+- **Flame-out with fuel still pumping.** If the flame goes out (wind,
+  fuel starvation, a failing glow plug) but the fuel pump keeps running —
+  which can happen — raw diesel keeps entering a hot combustion chamber
+  instead of burning cleanly. That's the "dense white smoke" failure mode
+  people report, and it is a real fire and CO risk, not just an
+  inconvenience. Heaters generally have their own safety shutdowns for
+  this, but don't assume software (this script included) is what's
+  standing between you and that outcome.
+- **Fire clearance.** Keep the heater's air intake, exhaust, and the space
+  around it clear of anything flammable (fuel containers, bedding,
+  cushions, dry grass, tarps) by the margin your specific heater's manual
+  calls for. Don't stack or store things against it because it's "just
+  sitting there off."
+- **Fuel handling.** Diesel is comparatively hard to ignite versus
+  gasoline, but a leaking line, a cracked tank, or fuel pooling near a hot
+  surface is still a real fire hazard. Check fuel lines and connections
+  periodically, especially before a season you plan to run this
+  unattended a lot.
+- **Unattended/remote-start specifically.** The entire point of this repo
+  is starting the heater when nobody's there to watch it. That means
+  nobody's there to smell smoke, see a flame-out, or notice the exhaust is
+  blocked, either. Don't treat "I can start it from my phone" as
+  equivalent to "someone competent is monitoring it" — pair remote starts
+  with the CO detector above, and ideally a camera pointed at the unit or
+  its exhaust, not blind trust that a command sent successfully means
+  everything downstream of that command is fine.
+
+None of this is exotic or unique to this project — it's the same basic
+respect every diesel/propane/kerosene heater deserves whether you're
+starting it by hand, an app, or a script. Use a real CO detector, don't
+block the exhaust, don't leave fuel or flammables where they don't belong,
+and don't be an idiot about it.
 
 ## License
 
