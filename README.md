@@ -1,8 +1,16 @@
 # diesel-heater-ble-macos
 
 Control a Chinese diesel parking heater that uses the **AirHeaterBLE** app
-protocol over Bluetooth Low Energy — no phone, no official app, on whatever
-hardware you actually have. Three ways in, same protocol underneath.
+protocol over Bluetooth Low Energy — no phone, no official app. Runs on a
+**Mac, a Raspberry Pi, or an ESP32** — pick whichever you've actually got:
+
+| Platform | Language/library | Status |
+|---|---|---|
+| **macOS / Linux / Raspberry Pi** | Python + [`bleak`](https://github.com/hbldh/bleak) | **Proven** — confirmed live against a real heater |
+| **ESP32** | Arduino C++ + ESP32 BLE library | Unverified — protocol proven, board code not yet flash-tested |
+
+Same protocol underneath either way — see `esp32/` for the microcontroller
+version, everything else below is the Mac/Pi Python version.
 
 ## Is this compatible with your heater?
 
@@ -38,13 +46,6 @@ compatible even if the heater is sold under some other storefront brand
 name (VOR, HCALORY-adjacent knockoffs, generic Amazon/eBay "5KW diesel air
 heater" listings, etc. all reuse the same handful of control boards) — the
 app name is a far more reliable signal than the brand printed on the box.
-
-Three ways to actually run it, same protocol underneath:
-
-| Platform | Language/library | Status |
-|---|---|---|
-| **macOS / Linux / Raspberry Pi** | Python + [`bleak`](https://github.com/hbldh/bleak) | **Proven** — confirmed live against a real heater |
-| **ESP32** | Arduino C++ + ESP32 BLE library | Unverified — protocol proven, board code not yet flash-tested |
 
 Pick whichever fits what you've got lying around: a laptop for a quick test,
 a Pi for something that just stays plugged in near the heater, or an ESP32
