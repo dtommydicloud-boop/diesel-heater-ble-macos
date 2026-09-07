@@ -1,15 +1,15 @@
 /*
   heater_control_esp32.ino
 
-  Control a Chinese diesel parking heater (BYD-branded, AirHeaterBLE app
-  protocol) over Bluetooth Low Energy, from an ESP32.
+  Control a Chinese diesel parking heater (AirHeaterBLE app protocol) over
+  Bluetooth Low Energy, from an ESP32, acting as a real always-on bridge --
+  it keeps trying to (re)connect on its own if the heater's not there yet
+  or drops out, rather than giving up after one scan.
 
   UNVERIFIED ON REAL HARDWARE. The protocol (command bytes, GATT UUIDs) is
   proven -- confirmed live against a real heater by the Python/bleak version
   in this repo. This ESP32 port has not itself been flash-tested against a
-  real device yet. The BLE client logic follows the standard ESP32 Arduino
-  BLE library patterns; if something doesn't compile or connect on your
-  board revision, that's the part to debug first, not the protocol.
+  real device yet.
 
   Why an ESP32 instead of a Mac/Pi: it's a few dollars, draws very little
   power, and can sit permanently plugged in right next to the heater as an
@@ -23,7 +23,9 @@
 
   Usage: flash this, open Serial Monitor at 115200 baud. Type "on", "off",
   or "status" + Enter to send that command once a heater's found and
-  connected.
+  connected. It will keep scanning/reconnecting in the background on its
+  own -- you don't need to reset the board if the heater loses power or
+  goes out of range temporarily.
 */
 
 #include <BLEDevice.h>
@@ -39,10 +41,28 @@ static const uint8_t CMD_MODE = 0x02;
 static const uint8_t CMD_POWER = 0x03;
 static const uint8_t CMD_LEVEL_OR_TEMP = 0x04;
 
-static BLEAdvertisedDevice *foundDevice = nullptr;
+static const uint32_t SCAN_DURATION_S = 15;
+static const uint32_t RECONNECT_RETRY_MS = 10000;  // how often to retry once disconnected
+
+// Advertised-name substrings seen in the wild for this protocol. This is a
+// fallback/logging aid, not the primary match -- name-only matching would
+// silently miss any brand not in this list (a real bug in an earlier
+// version of this file: it only checked for "byd", so a Vevor-branded unit
+// using the identical protocol would never be found despite this repo
+// claiming Vevor compatibility). The primary match is the advertised GATT
+// service UUID below, which is protocol-specific regardless of brand name.
+static const char *KNOWN_NAME_HINTS[] = {"byd", "vevor", "airheater"};
+static const int KNOWN_NAME_HINTS_COUNT = 3;
+
+// State -- stored by value, not heap-allocated, so there's nothing to leak
+// across repeated scan/connect/disconnect cycles.
+static BLEAddress *targetAddress = nullptr;  // only ever holds one address at a time; see setTarget()
 static BLEClient *client = nullptr;
 static BLERemoteCharacteristic *remoteChar = nullptr;
-static bool connected = false;
+static volatile bool connected = false;
+static volatile bool deviceFound = false;
+static volatile bool scanning = false;
+static unsigned long lastReconnectAttemptMs = 0;
 
 // Build a command frame: AA 55 0C 22 <type> <value> 00 <checksum>,
 // checksum = sum(bytes[2..6]) % 256 -- same frame format as the Python
@@ -70,48 +90,110 @@ static void notifyCallback(BLERemoteCharacteristic *ch, uint8_t *data,
   Serial.println();
 }
 
+bool nameMatchesKnownHeater(const std::string &name) {
+  std::string lower = name;
+  for (auto &c : lower) c = tolower(c);
+  for (int i = 0; i < KNOWN_NAME_HINTS_COUNT; i++) {
+    if (lower.find(KNOWN_NAME_HINTS[i]) != std::string::npos) return true;
+  }
+  return false;
+}
+
+void setTarget(BLEAddress addr) {
+  if (targetAddress != nullptr) {
+    delete targetAddress;
+  }
+  targetAddress = new BLEAddress(addr);
+}
+
 class ScanCallbacks : public BLEAdvertisedDeviceCallbacks {
+  // Deliberately does NOT call BLEDevice::getScan()->stop() from here.
+  // Stopping a scan from inside its own callback/interrupt context is a
+  // known anti-pattern in the ESP32 BLE library that can deadlock the
+  // scan mutex. Just set a flag; the main loop stops the scan safely.
   void onResult(BLEAdvertisedDevice advertisedDevice) override {
-    String name = advertisedDevice.getName().c_str();
-    String nameLower = name;
-    nameLower.toLowerCase();
-    if (nameLower.indexOf("byd") >= 0) {
-      Serial.print("Found heater: ");
-      Serial.println(name);
-      foundDevice = new BLEAdvertisedDevice(advertisedDevice);
-      BLEDevice::getScan()->stop();
+    bool serviceMatch = advertisedDevice.isAdvertisingService(SERVICE_UUID);
+    bool nameMatch = advertisedDevice.haveName() &&
+                      nameMatchesKnownHeater(advertisedDevice.getName());
+    if (serviceMatch || nameMatch) {
+      Serial.print("Found candidate: ");
+      Serial.print(advertisedDevice.haveName() ? advertisedDevice.getName().c_str() : "(no name)");
+      Serial.print(" @ ");
+      Serial.println(advertisedDevice.getAddress().toString().c_str());
+      setTarget(advertisedDevice.getAddress());
+      deviceFound = true;
     }
   }
 };
 
+class ClientCallbacks : public BLEClientCallbacks {
+  void onConnect(BLEClient *c) override {
+    Serial.println("Connected to heater.");
+  }
+  void onDisconnect(BLEClient *c) override {
+    Serial.println("Disconnected from heater -- will retry.");
+    connected = false;
+    remoteChar = nullptr;
+  }
+};
+
+static ClientCallbacks clientCallbacks;
+
+void startScan() {
+  if (scanning) return;
+  Serial.println("Scanning for heater...");
+  scanning = true;
+  deviceFound = false;
+  BLEScan *scan = BLEDevice::getScan();
+  scan->start(SCAN_DURATION_S, false);
+}
+
 bool connectToHeater() {
+  if (targetAddress == nullptr) return false;
+
+  // Free any previous client before making a new one -- an earlier version
+  // of this file called BLEDevice::createClient() again on every retry
+  // without ever freeing the old one, leaking a client object per failed
+  // attempt until the heap ran out.
+  if (client != nullptr) {
+    BLEDevice::deleteClient(client);
+    client = nullptr;
+  }
+
   client = BLEDevice::createClient();
-  if (!client->connect(foundDevice)) {
+  client->setClientCallbacks(&clientCallbacks);
+
+  if (!client->connect(*targetAddress)) {
     Serial.println("Connect failed.");
+    BLEDevice::deleteClient(client);
+    client = nullptr;
     return false;
   }
   BLERemoteService *service = client->getService(SERVICE_UUID);
   if (service == nullptr) {
     Serial.println("Service not found -- is this really the heater?");
     client->disconnect();
+    BLEDevice::deleteClient(client);
+    client = nullptr;
     return false;
   }
   remoteChar = service->getCharacteristic(CHAR_UUID);
   if (remoteChar == nullptr) {
     Serial.println("Characteristic not found.");
     client->disconnect();
+    BLEDevice::deleteClient(client);
+    client = nullptr;
     return false;
   }
   if (remoteChar->canNotify()) {
     remoteChar->registerForNotify(notifyCallback);
   }
-  Serial.println("Connected to heater.");
   return true;
 }
 
 void sendCommand(uint8_t commandType, uint8_t value) {
   if (!connected || remoteChar == nullptr) {
-    Serial.println("Not connected -- scan/connect first.");
+    Serial.println("Not connected -- waiting for heater to be found and connected.");
     return;
   }
   uint8_t frame[8];
@@ -122,31 +204,40 @@ void sendCommand(uint8_t commandType, uint8_t value) {
 void setup() {
   Serial.begin(115200);
   delay(1000);
-  Serial.println("Scanning for heater (BLE name containing 'byd')...");
-
   BLEDevice::init("");
   BLEScan *scan = BLEDevice::getScan();
   scan->setAdvertisedDeviceCallbacks(new ScanCallbacks());
   scan->setActiveScan(true);
-  scan->start(15, false);  // 15s scan, matches the Python version's timeout
-
-  if (foundDevice == nullptr) {
-    Serial.println(
-        "Heater not found in 15s. Check it's powered and in range, and "
-        "that this board's Bluetooth is actually working (some ESP32 "
-        "variants -- e.g. the ESP32-S2 -- have no Bluetooth at all, only "
-        "WiFi; you need a variant with real BLE, like the original ESP32 "
-        "or an S3/C3/C6).");
-    return;
-  }
-
-  connected = connectToHeater();
-  if (connected) {
-    Serial.println("Ready. Type on / off / status and press Enter.");
-  }
+  Serial.println("Ready. Type on / off / status and press Enter.");
+  Serial.println(
+      "Note: some ESP32 variants -- e.g. the ESP32-S2 -- have no Bluetooth "
+      "at all, only WiFi. You need a variant with real BLE, like the "
+      "original ESP32 or an S3/C3/C6.");
+  startScan();
 }
 
 void loop() {
+  // Scan/connect state machine -- this is what makes it an actual
+  // always-on bridge instead of a one-shot script: if the heater isn't
+  // found yet, or drops out later, this keeps retrying on its own rather
+  // than requiring a physical reset.
+  if (scanning && deviceFound) {
+    BLEDevice::getScan()->stop();
+    scanning = false;
+    if (connectToHeater()) {
+      connected = true;
+    } else {
+      lastReconnectAttemptMs = millis();
+    }
+  }
+
+  if (!connected && !scanning) {
+    if (millis() - lastReconnectAttemptMs > RECONNECT_RETRY_MS) {
+      lastReconnectAttemptMs = millis();
+      startScan();
+    }
+  }
+
   if (!Serial.available()) return;
   String cmd = Serial.readStringUntil('\n');
   cmd.trim();

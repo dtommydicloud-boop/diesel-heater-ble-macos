@@ -151,9 +151,12 @@ client code itself hasn't been flash-tested yet. See `esp32/README.md`.
   tested against a real device), `0x04`=LEVEL_OR_TEMP (1-10 in LEVEL mode,
   8-36°C in AUTOMATIC mode).
 - **BLE addresses are not portable.** CoreBluetooth (and most BLE stacks)
-  assign a synthetic address per observing device/OS — always re-scan by
-  advertised name (contains `byd`, case-insensitive) rather than hardcoding
-  an address from a previous run or a different machine.
+  assign a synthetic address per observing device/OS — always re-scan
+  rather than hardcoding an address from a previous run or a different
+  machine. The scan matches by the advertised GATT service UUID above (the
+  real, protocol-level identifier), with a name-substring check (`byd`,
+  `vevor`, `airheater`) as a fallback — matching on name alone would have
+  silently missed any brand not in that list.
 
 ## Bonus: Claude Code skill
 

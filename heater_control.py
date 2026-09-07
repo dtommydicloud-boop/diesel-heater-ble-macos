@@ -24,9 +24,19 @@ import sys
 
 from bleak import BleakClient, BleakScanner
 
+SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb"
 CHAR_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
 SCAN_TIMEOUT_S = 12.0
 COMMAND_TIMEOUT_S = 10.0
+
+# Advertised-name substrings seen in the wild for this protocol. This is a
+# convenience/logging aid, NOT the real match -- name-only matching would
+# silently miss any brand not in this list (a real bug found in an earlier
+# version: it only checked for "byd", so a Vevor-branded unit using the
+# identical protocol would never be found despite the README claiming
+# Vevor compatibility). The real match is the advertised GATT service UUID,
+# which is protocol-specific regardless of what brand name is on the box.
+KNOWN_NAME_HINTS = ("byd", "vevor", "airheater")
 
 # Confirmed command types (byte 4 of the frame):
 POWER = 0x03      # value: 0x01=ON, 0x00=OFF
@@ -43,14 +53,23 @@ def make_cmd(command_type: int, value: int) -> bytearray:
 
 
 async def find_heater() -> tuple[str | None, str | None]:
-    """Scan for the heater by BLE advertised name. Never reuse a saved
-    address -- CoreBluetooth (and most BLE stacks) assign a synthetic
-    address per observing device/OS, so a saved address from a different
-    machine or even a previous boot will not necessarily work."""
+    """Scan for the heater by its advertised GATT service UUID -- the real,
+    protocol-level identifier, not the brand name printed on the box (which
+    varies: BYD, Vevor, and others all use this identical protocol). Never
+    reuse a saved address either -- CoreBluetooth (and most BLE stacks)
+    assign a synthetic address per observing device/OS, so a saved address
+    from a different machine or even a previous boot will not necessarily
+    work."""
     devices = await BleakScanner.discover(timeout=SCAN_TIMEOUT_S, return_adv=True)
     for addr, (dev, adv) in devices.items():
         name = dev.name or adv.local_name
-        if name and "byd" in name.lower():
+        service_uuids = [u.lower() for u in (adv.service_uuids or [])]
+        if SERVICE_UUID in service_uuids:
+            return addr, name
+        # Fallback for devices that don't advertise the service UUID
+        # directly (some BLE stacks only expose it after connecting):
+        # match on a known name substring instead.
+        if name and any(hint in name.lower() for hint in KNOWN_NAME_HINTS):
             return addr, name
     return None, None
 
@@ -73,7 +92,7 @@ async def main() -> int:
         print(f"Usage: {sys.argv[0]} <on|off|status>", file=sys.stderr)
         return 2
 
-    print("Scanning for heater (BLE name containing 'byd')...")
+    print("Scanning for heater (AirHeaterBLE protocol service)...")
     addr, name = await find_heater()
     if addr is None:
         print(

@@ -10,6 +10,14 @@ version elsewhere in this repo against a real BYD heater). The ESP32 BLE
 client code itself has not yet been flash-tested on real hardware. If you
 try it and it works (or doesn't), please open an issue or a PR.
 
+This version scans/reconnects continuously in the background rather than
+giving up after one attempt — a real gap an earlier version had, caught by
+code review before anyone flashed it: the first draft only scanned once at
+boot and never noticed or recovered from a disconnect, which defeats the
+entire point of using this as an always-on bridge. It also matches devices
+by the advertised GATT service UUID (not just a hardcoded "byd" name
+check), so Vevor and other same-protocol brands aren't silently ignored.
+
 ## Board choice matters
 
 Not every board sold as "ESP32" actually has Bluetooth. The original ESP32
