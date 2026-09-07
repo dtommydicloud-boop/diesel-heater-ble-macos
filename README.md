@@ -30,7 +30,10 @@ one of them: **AirHeaterBLE**, protocol frame markers `AA55`/`AA66`.
 "AirHeaterBLE," or the app store listing/manual says so):
 - **BYD**-branded units (this is the exact device this repo was built and
   tested against — BLE name pattern `BYD-XXXXXXXXXXXX`)
-- **Vevor**
+- **Vevor units that use the AirHeaterBLE/AA55 app specifically** — Vevor
+  sells heaters across multiple different control-board generations, not
+  all of which use this protocol, so "Vevor" alone isn't a guarantee;
+  check the app name as described below regardless of brand.
 
 **Probably a different, incompatible protocol** (documented under other
 apps/frame formats by the wider community, don't assume this repo works
@@ -153,10 +156,20 @@ client code itself hasn't been flash-tested yet. See `esp32/README.md`.
 - **BLE addresses are not portable.** CoreBluetooth (and most BLE stacks)
   assign a synthetic address per observing device/OS — always re-scan
   rather than hardcoding an address from a previous run or a different
-  machine. The scan matches by the advertised GATT service UUID above (the
-  real, protocol-level identifier), with a name-substring check (`byd`,
-  `vevor`, `airheater`) as a fallback — matching on name alone would have
-  silently missed any brand not in that list.
+  machine. The scan matches primarily by the advertised GATT service UUID
+  above, with a name-substring check (`byd`, `vevor`, `airheater`) as a
+  fallback — matching on name alone (an earlier version of this repo's
+  bug) would silently miss any brand not in that hardcoded list. Note the
+  service UUID isn't an absolute guarantee either — `FFE0`/`FFE1` is a
+  common 16-bit vendor-style UUID pattern in cheap BLE peripherals
+  generally, not cryptographically unique to this heater family — the real
+  confirmation is successfully reading/writing the characteristic and
+  getting a real response back, which both scripts do.
+- **macOS 12.0–12.2 (Monterey) caveat:** `bleak`'s own docs note that on
+  those specific OS versions, service-UUID scan filtering requires the app
+  be packaged with `py2app`; this script doesn't do that, so on that narrow
+  OS range specifically, scanning may need the name-based fallback instead.
+  Not an issue on other macOS versions.
 
 ## Bonus: Claude Code skill
 

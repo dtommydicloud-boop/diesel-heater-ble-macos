@@ -2,14 +2,34 @@
   heater_control_esp32.ino
 
   Control a Chinese diesel parking heater (AirHeaterBLE app protocol) over
-  Bluetooth Low Energy, from an ESP32, acting as a real always-on bridge --
-  it keeps trying to (re)connect on its own if the heater's not there yet
-  or drops out, rather than giving up after one scan.
+  Bluetooth Low Energy, from an ESP32, acting as an always-on bridge -- it
+  keeps trying to (re)connect on its own if the heater's not there yet or
+  drops out, rather than giving up after one scan.
 
-  UNVERIFIED ON REAL HARDWARE. The protocol (command bytes, GATT UUIDs) is
-  proven -- confirmed live against a real heater by the Python/bleak version
-  in this repo. This ESP32 port has not itself been flash-tested against a
-  real device yet.
+  UNVERIFIED ON REAL HARDWARE, and STILL UNVERIFIED AFTER TWO ROUNDS OF
+  CODE REVIEW (not flash-testing). The protocol itself (command bytes, GATT
+  UUIDs) is proven -- confirmed live against a real heater by the
+  Python/bleak version in this repo. This ESP32 port has been through two
+  independent AI code reviews (checked against the real Espressif
+  arduino-esp32 BLE library source), which caught and fixed real API-misuse
+  bugs a first pass missed -- but neither review is a substitute for
+  actually flashing this to a board and testing it. Known remaining risk
+  areas, flagged honestly rather than glossed over:
+    - The non-blocking scan callback signature (`BLEScanResults` vs a
+      pointer to it) has varied across arduino-esp32 core versions. If this
+      doesn't compile against your installed core version, that's the
+      first thing to check -- see the comment on onScanComplete() below.
+    - Storing and reconnecting via a copied BLEAdvertisedDevice (to
+      preserve the BLE address type, which a bare BLEAddress loses) assumes
+      BLEAdvertisedDevice supports copy assignment safely. This has not
+      been runtime-verified.
+    - Response frame validation only checks for the AA 66 header seen in
+      the two real captured responses (power on/off) -- the full response
+      checksum algorithm is not confirmed, so this is a sanity check, not
+      full validation.
+
+  If you flash this and it works (or doesn't), please open an issue or PR
+  -- that's genuinely the missing piece here, not more code review.
 
   Why an ESP32 instead of a Mac/Pi: it's a few dollars, draws very little
   power, and can sit permanently plugged in right next to the heater as an
@@ -23,9 +43,10 @@
 
   Usage: flash this, open Serial Monitor at 115200 baud. Type "on", "off",
   or "status" + Enter to send that command once a heater's found and
-  connected. It will keep scanning/reconnecting in the background on its
-  own -- you don't need to reset the board if the heater loses power or
-  goes out of range temporarily.
+  connected. It scans/reconnects in the background on its own -- you
+  shouldn't need to reset the board if the heater loses power or goes out
+  of range temporarily (see caveats above on why this is "should" and not
+  "confirmed").
 */
 
 #include <BLEDevice.h>
@@ -42,21 +63,22 @@ static const uint8_t CMD_POWER = 0x03;
 static const uint8_t CMD_LEVEL_OR_TEMP = 0x04;
 
 static const uint32_t SCAN_DURATION_S = 15;
-static const uint32_t RECONNECT_RETRY_MS = 10000;  // how often to retry once disconnected
+static const uint32_t RECONNECT_RETRY_MS = 10000;  // how long to wait before starting another scan
 
-// Advertised-name substrings seen in the wild for this protocol. This is a
-// fallback/logging aid, not the primary match -- name-only matching would
-// silently miss any brand not in this list (a real bug in an earlier
-// version of this file: it only checked for "byd", so a Vevor-branded unit
-// using the identical protocol would never be found despite this repo
-// claiming Vevor compatibility). The primary match is the advertised GATT
-// service UUID below, which is protocol-specific regardless of brand name.
+// Advertised-name substrings seen in the wild for this protocol. Fallback
+// only -- the primary match is the advertised GATT service UUID below,
+// which is the real protocol-level identifier and (per independent review)
+// the more reliable of the two, though not an absolute guarantee: the
+// 16-bit FFE0/FFE1 UUID pattern is common enough in cheap BLE peripherals
+// that a service-UUID match alone isn't mathematically unique to this
+// heater family either -- it's confirmed by then successfully reading the
+// specific characteristic and getting a real response, not by the
+// advertisement alone.
 static const char *KNOWN_NAME_HINTS[] = {"byd", "vevor", "airheater"};
 static const int KNOWN_NAME_HINTS_COUNT = 3;
 
-// State -- stored by value, not heap-allocated, so there's nothing to leak
-// across repeated scan/connect/disconnect cycles.
-static BLEAddress *targetAddress = nullptr;  // only ever holds one address at a time; see setTarget()
+static BLEAdvertisedDevice targetDevice;  // copy-assigned in onResult(); avoids a raw new/delete per scan
+static bool haveTarget = false;
 static BLEClient *client = nullptr;
 static BLERemoteCharacteristic *remoteChar = nullptr;
 static volatile bool connected = false;
@@ -88,6 +110,13 @@ static void notifyCallback(BLERemoteCharacteristic *ch, uint8_t *data,
     Serial.print(data[i], HEX);
   }
   Serial.println();
+  // Sanity check only -- the two real captured responses (power on/off)
+  // both start AA 66, but the full response checksum/length rules aren't
+  // confirmed the way the command-frame checksum is, so this is a soft
+  // warning, not a hard validation.
+  if (length < 2 || data[0] != 0xAA || data[1] != 0x66) {
+    Serial.println("  (unexpected header -- may not be a valid heater response)");
+  }
 }
 
 bool nameMatchesKnownHeater(const std::string &name) {
@@ -99,19 +128,14 @@ bool nameMatchesKnownHeater(const std::string &name) {
   return false;
 }
 
-void setTarget(BLEAddress addr) {
-  if (targetAddress != nullptr) {
-    delete targetAddress;
-  }
-  targetAddress = new BLEAddress(addr);
-}
-
 class ScanCallbacks : public BLEAdvertisedDeviceCallbacks {
   // Deliberately does NOT call BLEDevice::getScan()->stop() from here.
   // Stopping a scan from inside its own callback/interrupt context is a
   // known anti-pattern in the ESP32 BLE library that can deadlock the
-  // scan mutex. Just set a flag; the main loop stops the scan safely.
+  // scan mutex. Just record the match; the main loop stops the scan
+  // safely, from outside this callback's context.
   void onResult(BLEAdvertisedDevice advertisedDevice) override {
+    if (deviceFound) return;  // already have a match this scan cycle
     bool serviceMatch = advertisedDevice.isAdvertisingService(SERVICE_UUID);
     bool nameMatch = advertisedDevice.haveName() &&
                       nameMatchesKnownHeater(advertisedDevice.getName());
@@ -120,7 +144,11 @@ class ScanCallbacks : public BLEAdvertisedDeviceCallbacks {
       Serial.print(advertisedDevice.haveName() ? advertisedDevice.getName().c_str() : "(no name)");
       Serial.print(" @ ");
       Serial.println(advertisedDevice.getAddress().toString().c_str());
-      setTarget(advertisedDevice.getAddress());
+      // Copy-assign rather than storing a bare BLEAddress -- preserves the
+      // BLE address type (public/random), which BLEClient::connect() needs
+      // for some peripherals and a bare address would silently drop.
+      targetDevice = advertisedDevice;
+      haveTarget = true;
       deviceFound = true;
     }
   }
@@ -139,33 +167,56 @@ class ClientCallbacks : public BLEClientCallbacks {
 
 static ClientCallbacks clientCallbacks;
 
+// Fires when a scan completes, whether from timing out or being stopped
+// via BLEScan::stop() from the main loop. This overload/signature matches
+// the arduino-esp32 BLE library's non-blocking scan API -- if your
+// installed core version has a different signature (some older/newer
+// versions differ), this is the first thing to check if it fails to
+// compile.
+static void onScanComplete(BLEScanResults results) {
+  scanning = false;
+  if (!deviceFound) {
+    // No match this cycle -- try again after a pause instead of spinning.
+    lastReconnectAttemptMs = millis();
+  }
+}
+
 void startScan() {
   if (scanning) return;
   Serial.println("Scanning for heater...");
   scanning = true;
   deviceFound = false;
-  BLEScan *scan = BLEDevice::getScan();
-  scan->start(SCAN_DURATION_S, false);
+  // Non-blocking overload (duration, completion-callback, continue-flag) --
+  // NOT the blocking two-argument overload. Using the blocking one here
+  // was a real bug in an earlier version of this file: it froze loop()
+  // for the entire scan duration and, worse, left `scanning` stuck `true`
+  // forever after a no-match scan, permanently breaking reconnection.
+  BLEDevice::getScan()->start(SCAN_DURATION_S, onScanComplete, false);
 }
 
 bool connectToHeater() {
-  if (targetAddress == nullptr) return false;
+  if (!haveTarget) return false;
 
-  // Free any previous client before making a new one -- an earlier version
-  // of this file called BLEDevice::createClient() again on every retry
-  // without ever freeing the old one, leaking a client object per failed
-  // attempt until the heap ran out.
+  // Disconnect and free any previous client before making a new one.
+  // NOTE: an earlier version of this file called
+  // BLEDevice::deleteClient(client), which does not exist in the current
+  // official Espressif arduino-esp32 BLE library and would fail to
+  // compile. Using plain `delete` on the client pointer instead, which is
+  // the pattern the library itself expects.
   if (client != nullptr) {
-    BLEDevice::deleteClient(client);
+    if (client->isConnected()) client->disconnect();
+    delete client;
     client = nullptr;
   }
 
   client = BLEDevice::createClient();
   client->setClientCallbacks(&clientCallbacks);
 
-  if (!client->connect(*targetAddress)) {
+  // Connecting via the BLEAdvertisedDevice* overload (not a bare address)
+  // so the library can use the correct address type internally.
+  if (!client->connect(&targetDevice)) {
     Serial.println("Connect failed.");
-    BLEDevice::deleteClient(client);
+    delete client;
     client = nullptr;
     return false;
   }
@@ -173,7 +224,7 @@ bool connectToHeater() {
   if (service == nullptr) {
     Serial.println("Service not found -- is this really the heater?");
     client->disconnect();
-    BLEDevice::deleteClient(client);
+    delete client;
     client = nullptr;
     return false;
   }
@@ -181,7 +232,7 @@ bool connectToHeater() {
   if (remoteChar == nullptr) {
     Serial.println("Characteristic not found.");
     client->disconnect();
-    BLEDevice::deleteClient(client);
+    delete client;
     client = nullptr;
     return false;
   }
@@ -198,7 +249,10 @@ void sendCommand(uint8_t commandType, uint8_t value) {
   }
   uint8_t frame[8];
   buildCommand(commandType, value, frame);
-  remoteChar->writeValue(frame, 8, true);
+  bool ok = remoteChar->writeValue(frame, 8, true);
+  if (!ok) {
+    Serial.println("Write failed -- command may not have been sent.");
+  }
 }
 
 void setup() {
@@ -222,8 +276,10 @@ void loop() {
   // found yet, or drops out later, this keeps retrying on its own rather
   // than requiring a physical reset.
   if (scanning && deviceFound) {
+    // Safe to call stop() here -- this is the MAIN LOOP, not the scan
+    // callback itself, so it doesn't hit the deadlock anti-pattern.
+    // Calling stop() triggers onScanComplete(), which clears `scanning`.
     BLEDevice::getScan()->stop();
-    scanning = false;
     if (connectToHeater()) {
       connected = true;
     } else {
